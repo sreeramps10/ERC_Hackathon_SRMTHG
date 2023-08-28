@@ -1,23 +1,21 @@
-#!/usr/bin/env python3
-#Following is the import line for importing the obstacle detection methods i.e. isValidPoint()
-#you need to name this node as "path_planner"
 import obstacle_detection
 import rospy
 import random
 import math
 from geometry_msgs.msg import PoseStamped, Point
-from std_msgs.msg import Header
 from obstacle_detection import isValidPoint
 
 class PathPlannerNode:
     def __init__(self):
         rospy.init_node('path_planner')
         self.planned_path_pub = rospy.Publisher('/planned_path', PoseStamped, queue_size=10)
-        self.obstacles = [(1.0, 1.0), (2.0, 3.0), (-2.0, -1.0)]  # Example obstacle coordinates
-
+        self.obstacles = [(1.0, 1.0), (2.0, 3.0), (-2.0, -1.0)]  
     def run(self):
-        # Start path planning from the robot's starting position
-        start_pose = PoseStamped(header=Header(stamp=rospy.Time.now(), frame_id='map'), pose=Point(x=-5.06, y=-3.12))
+        start_pose = PoseStamped()
+        start_pose.header.stamp = rospy.Time.now()
+        start_pose.header.frame_id = 'map'
+        start_pose.pose.position.x = -5.06
+        start_pose.pose.position.y = -3.12
         self.plan_path(start_pose)
         rospy.spin()
 
@@ -27,54 +25,59 @@ class PathPlannerNode:
         goal_radius = 0.5
         step_size = 0.2
 
-        # RRT data structures
-        tree = {start_pose: None}
+        tree = {self.pose_to_tuple(start_pose): None}
 
         for iteration in range(max_iterations):
-            # Randomly sample a point in the workspace
             if random.random() < 0.8:
-                rand_point = Point(x=random.uniform(-5.0, 5.0), y=random.uniform(-3.5, 3.5))
+                rand_point = Point()
+                rand_point.x = random.uniform(-5.0, 5.0)
+                rand_point.y = random.uniform(-3.5, 3.5)
             else:
-                # With a small probability, sample the goal directly
-                rand_point = Point(x=0.57, y=0.33)
+                rand_point = Point()
+                rand_point.x = 0.57
+                rand_point.y = 0.33
 
-            # Find the nearest point in the tree
-            nearest_pose = min(tree.keys(), key=lambda pose: math.hypot(pose.pose.position.x - rand_point.x, pose.pose.position.y - rand_point.y))
+            rand_tuple = (rand_point.x, rand_point.y)
+            nearest_key = min(tree.keys(), key=lambda k: math.hypot(k[0] - rand_tuple[0], k[1] - rand_tuple[1]))
 
-            # Extend the tree towards the sampled point
-            dx = rand_point.x - nearest_pose.pose.position.x
-            dy = rand_point.y - nearest_pose.pose.position.y
+            dx = rand_tuple[0] - nearest_key[0]
+            dy = rand_tuple[1] - nearest_key[1]
             distance = math.hypot(dx, dy)
             if distance > step_size:
                 scale = step_size / distance
-                new_pose = PoseStamped(header=Header(stamp=rospy.Time.now(), frame_id='map'), pose=Point(x=nearest_pose.pose.position.x + dx * scale, y=nearest_pose.pose.position.y + dy * scale))
+                new_key = (nearest_key[0] + dx * scale, nearest_key[1] + dy * scale)
             else:
-                new_pose = PoseStamped(header=Header(stamp=rospy.Time.now(), frame_id='map'), pose=rand_point)
+                new_key = rand_tuple
 
-            # Check if the new point is valid (not in collision with obstacles)
-            if self.is_valid_point(nearest_pose.pose.position.x, nearest_pose.pose.position.y, new_pose.pose.position.x, new_pose.pose.position.y):
-                tree[new_pose] = nearest_pose
+            if self.is_valid_point(nearest_key[0], nearest_key[1], new_key[0], new_key[1]):
+                tree[new_key] = nearest_key
 
-                # Check if the goal is reached
-                if math.hypot(new_pose.pose.position.x - 0.57, new_pose.pose.position.y - 0.33) < goal_radius:
-                    self.publish_planned_path(tree, new_pose)
+                if math.hypot(new_key[0] - 0.57, new_key[1] - 0.33) < goal_radius:
+                    self.publish_planned_path(tree, new_key)
                     break
 
     def is_valid_point(self, parentX, parentY, childX, childY):
-        # Call the isValidPoint function from obstacle_detection.py
         return isValidPoint(parentX, parentY, childX, childY)
 
-    def publish_planned_path(self, tree, goal_pose):
-        # Backtrack the tree from the goal to the start to retrieve the planned path
-        path = [goal_pose]
-        while tree[goal_pose] is not None:
-            goal_pose = tree[goal_pose]
-            path.append(goal_pose)
+    def pose_to_tuple(self, pose):
+        return (pose.pose.position.x, pose.pose.position.y)
+        
+    def tuple_to_pose(self, tuple_data):
+        pose = PoseStamped()
+        pose.header.stamp = rospy.Time.now()
+        pose.header.frame_id = 'map'
+        pose.pose.position.x = tuple_data[0]
+        pose.pose.position.y = tuple_data[1]
+        return pose
 
-        # Reverse the path to get it from start to goal
+    def publish_planned_path(self, tree, goal_key):
+        path = [self.tuple_to_pose(goal_key)]
+        while tree[goal_key] is not None:
+            goal_key = tree[goal_key]
+            path.append(self.tuple_to_pose(goal_key))
+
         path = path[::-1]
-
-        # Publish the planned path
+        
         for pose in path:
             self.planned_path_pub.publish(pose)
             rospy.sleep(0.1)
